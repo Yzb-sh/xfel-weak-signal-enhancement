@@ -1,0 +1,21 @@
+# DeepPhase-X Model Configuration
+# Physics-guided U-Net architecture parameters
+
+model:
+  # Input channels: 2 for dual-input (I, √I)
+  in_channels: 2
+  
+  # Output channels: 1 for denoised intensity
+  out_channels: 1
+  
+  # Base number of filters (doubles at each depth level)
+  base_filters: 64
+  
+  # U-Net depth (number of downsampling/upsampling stages)
+  depth: 4
+  
+  # Use FourierConv layers for global frequency-domain processing
+  use_fourier_conv: true
+  
+  # Dropout rate for regularization (0 = no dropout)
+  dropout: 0.0

@@ -1,0 +1,10 @@
+torch>=2.0
+numpy
+scipy
+h5py
+matplotlib
+opencv-python
+bm3d
+optuna
+pyyaml
+tqdm

@@ -1,0 +1,36 @@
+# DeepPhase-X NoiseGAN Configuration
+# Generative noise simulation engine parameters
+
+gan:
+  # GAN architecture mode
+  # - cyclegan: CycleGAN for unpaired domain adaptation (Sim ↔ Real)
+  # - wgan-gp: Wasserstein GAN with gradient penalty for stable training
+  mode: "cyclegan"
+  
+  # Loss weights
+  # Cycle consistency: F(G(x)) ≈ x
+  lambda_cycle: 10.0
+  
+  # Identity loss: G(y_real) ≈ y_real
+  lambda_identity: 5.0
+  
+  # Physics consistency: protect strong signals
+  # L_consistency = || M ⊙ (G(x) - x) ||₁
+  lambda_physics: 10.0
+  
+  # PatchGAN discriminator patch size
+  patch_size: 64
+  
+  # Use spectral discriminator in k-space
+  spectral_disc: true
+  
+  # Strong signal threshold for masking (0-1)
+  # Pixels above this percentile are protected
+  signal_threshold: 0.9
+  
+  # Generator architecture
+  generator_filters: 64
+  n_residual_blocks: 9
+  
+  # Discriminator architecture
+  discriminator_filters: 64

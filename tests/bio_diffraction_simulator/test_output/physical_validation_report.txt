@@ -1,0 +1,15 @@
+============================================================
+Physical Validation Report
+============================================================
+
+FOV Consistency: PASSED
+  Expected FOV: 0.061440 m
+  Actual FOV: 0.061440 m
+
+Sampling: PASSED
+  Grid size: 585
+  FOV: 61.44 mm
+  q_max_nyquist: 2.99e+04 1/m
+
+All Validations: PASSED
+============================================================

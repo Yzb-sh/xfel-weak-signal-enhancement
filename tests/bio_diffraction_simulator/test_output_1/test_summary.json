@@ -1,0 +1,21 @@
+{
+  "num_samples": 10,
+  "physical_validation": true,
+  "component_tests": {
+    "bio_generator": true,
+    "data_augmentor": true,
+    "diffraction_simulator": true,
+    "intensity_normalizer": true,
+    "random_mask_applier": true,
+    "noise_beamstop_applier": true
+  },
+  "sample_validations": {
+    "n_passed": 0,
+    "n_total": 10
+  },
+  "normalization_validations": {
+    "n_passed": 10,
+    "n_total": 10
+  },
+  "all_passed": true
+}

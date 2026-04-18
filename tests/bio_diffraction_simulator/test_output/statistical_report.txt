@@ -1,0 +1,75 @@
+============================================================
+Statistical Validation Report
+============================================================
+
+Total samples: 10
+
+Range validation [0,1]: 10/10 passed
+Non-negative validation: 10/10 passed
+Poisson statistics: 10/10 passed
+Intensity normalization: 10/10 passed
+
+Per-sample details:
+------------------------------------------------------------
+
+Sample 0:
+  Range: Output range: [0.0000, 1.0000] PASSED
+  Non-negative: Non-negative: min=6.02e-08 PASSED
+  Poisson: Noise present: True, Signal present: True, Dynamic range: True PASSED
+  Intensity norm: Intensity sum: 1.0000002384 PASSED
+
+Sample 1:
+  Range: Output range: [0.0000, 1.0000] PASSED
+  Non-negative: Non-negative: min=4.83e-06 PASSED
+  Poisson: Noise present: True, Signal present: True, Dynamic range: True PASSED
+  Intensity norm: Intensity sum: 1.0000001192 PASSED
+
+Sample 2:
+  Range: Output range: [0.0000, 1.0000] PASSED
+  Non-negative: Non-negative: min=1.94e-06 PASSED
+  Poisson: Noise present: True, Signal present: True, Dynamic range: True PASSED
+  Intensity norm: Intensity sum: 1.0000001192 PASSED
+
+Sample 3:
+  Range: Output range: [0.0000, 1.0000] PASSED
+  Non-negative: Non-negative: min=2.67e-08 PASSED
+  Poisson: Noise present: True, Signal present: True, Dynamic range: True PASSED
+  Intensity norm: Intensity sum: 1.0000000000 PASSED
+
+Sample 4:
+  Range: Output range: [0.0000, 1.0000] PASSED
+  Non-negative: Non-negative: min=8.21e-09 PASSED
+  Poisson: Noise present: True, Signal present: True, Dynamic range: True PASSED
+  Intensity norm: Intensity sum: 0.9999999404 PASSED
+
+Sample 5:
+  Range: Output range: [0.0000, 1.0000] PASSED
+  Non-negative: Non-negative: min=1.37e-08 PASSED
+  Poisson: Noise present: True, Signal present: True, Dynamic range: True PASSED
+  Intensity norm: Intensity sum: 1.0000000000 PASSED
+
+Sample 6:
+  Range: Output range: [0.0000, 1.0000] PASSED
+  Non-negative: Non-negative: min=2.58e-08 PASSED
+  Poisson: Noise present: True, Signal present: True, Dynamic range: True PASSED
+  Intensity norm: Intensity sum: 1.0000000000 PASSED
+
+Sample 7:
+  Range: Output range: [0.0000, 1.0000] PASSED
+  Non-negative: Non-negative: min=3.66e-07 PASSED
+  Poisson: Noise present: True, Signal present: True, Dynamic range: True PASSED
+  Intensity norm: Intensity sum: 1.0000002384 PASSED
+
+Sample 8:
+  Range: Output range: [0.0000, 1.0000] PASSED
+  Non-negative: Non-negative: min=1.88e-08 PASSED
+  Poisson: Noise present: True, Signal present: True, Dynamic range: True PASSED
+  Intensity norm: Intensity sum: 0.9999999404 PASSED
+
+Sample 9:
+  Range: Output range: [0.0000, 1.0000] PASSED
+  Non-negative: Non-negative: min=3.17e-08 PASSED
+  Poisson: Noise present: True, Signal present: True, Dynamic range: True PASSED
+  Intensity norm: Intensity sum: 0.9999999404 PASSED
+
+============================================================

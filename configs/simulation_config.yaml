@@ -1,0 +1,28 @@
+# DeepPhase-X Simulation Configuration
+# Physical parameters for X-ray diffraction simulation
+
+simulation:
+  # X-ray wavelength in meters (1 Angstrom = 1e-10 m)
+  # Typical XFEL: 0.5-2 Angstrom (8-25 keV)
+  wavelength: 1.0e-10
+  
+  # Detector pixel size in meters
+  # Typical: 100-200 μm for CSPAD, AGIPD, Jungfrau
+  pixel_size: 200.0e-6
+  
+  # Sample-to-detector distance in meters
+  detector_dist: 0.5
+  
+  # Image size in pixels (square)
+  grid_size: 128
+  
+  # Real-space resolution in Angstrom per pixel
+  resolution: 1.0
+  
+  # Oversampling ratio (must be ≥2 for phase retrieval)
+  # Higher values improve reconstruction but increase computation
+  oversampling_ratio: 2.0
+  
+  # Beam stop radius in pixels
+  # Blocks direct beam at center of diffraction pattern
+  beam_stop_radius: 5

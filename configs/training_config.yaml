@@ -1,0 +1,42 @@
+# DeepPhase-X Training Configuration
+# Training hyperparameters and curriculum learning settings
+
+training:
+  # Batch size (reduce if GPU memory is limited)
+  batch_size: 16
+  
+  # Learning rate (Adam optimizer)
+  learning_rate: 1.0e-4
+  
+  # Total training epochs
+  epochs: 100
+  
+  # Loss function type
+  # - pnll: Poisson Negative Log-Likelihood (recommended for low photon counts)
+  # - mse: Mean Squared Error
+  loss_type: "pnll"
+  
+  # Use frequency-weighted loss to preserve high-frequency details
+  freq_weight: true
+  
+  # Weight for high-frequency components (>1 emphasizes fine details)
+  high_freq_weight: 2.0
+  
+  # Automatic Mixed Precision (AMP) for faster training
+  use_amp: true
+  
+  # Distributed training across multiple GPUs
+  distributed: false
+  
+  # DataLoader workers
+  num_workers: 4
+  
+  # Checkpoint save interval (epochs)
+  save_interval: 10
+  
+  # Curriculum learning strategy
+  # Phase 1: Pretrain with analytic noise (Poisson + Gaussian)
+  # Phase 2: Fine-tune with NoiseGAN-generated complex noise
+  curriculum:
+    phase1_epochs: 50
+    phase2_epochs: 50
