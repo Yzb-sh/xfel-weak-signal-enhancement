@@ -49,6 +49,18 @@ class BioSampleGenerator:
         else:
             self.scale_factor = 1.0
 
+    def set_seed(self, seed: int):
+        """Reset RNG seed without re-computing configuration."""
+        self.rng = np.random.default_rng(seed)
+
+    def set_sample_size(self, sample_size_px: Optional[int]):
+        """Update sample_size_px and recalculate scale factor."""
+        self.sample_size_px = sample_size_px
+        if sample_size_px is not None:
+            self.scale_factor = sample_size_px / 140.0
+        else:
+            self.scale_factor = 1.0
+
     def _get_scaled_config(self):
         """Get bacteria configuration with size scaling applied."""
         if self.sample_size_px is not None:

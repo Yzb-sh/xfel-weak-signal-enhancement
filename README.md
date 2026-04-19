@@ -23,12 +23,40 @@ pip install -r requirements.txt
 ### 1. 生成生物衍射仿真数据集
 
 ```bash
-# 小规模测试（10+5+5 样本）
-python scripts/generate_bio_dataset.py --num_train 10 --num_val 5 --num_test 5 --output_file data/simulated/bio_test.h5
+# 小规模测试（20+5+5 样本）
+python scripts/generate_bio_dataset.py --num_train 20 --num_val 5 --num_test 5 --output_dir data/simulated/bio_diffraction_test
 
 # 完整数据集（训练集10000 + 验证集1000 + 测试集1000）
-python scripts/generate_bio_dataset.py --num_train 10000 --num_val 1000 --num_test 1000 --output_file data/simulated/bio_diffraction_v1.h5
+python scripts/generate_bio_dataset.py --num_train 10000 --num_val 1000 --num_test 1000 --output_dir data/simulated/bio_diffraction_v1
+
+# 大规模数据集 + 自定义批次大小（控制内存用量）
+python scripts/generate_bio_dataset.py --num_train 100000 --num_val 5000 --num_test 5000 --output_dir data/simulated/bio_diffraction_v2 --batch_size 200
 ```
+
+**参数说明：**
+
+| 参数 | 默认值 | 说明 |
+|------|--------|------|
+| `--output_dir` | `data/simulated/bio_diffraction_v1` | 输出目录路径 |
+| `--num_train` | 10000 | 训练集样本数 |
+| `--num_val` | 1000 | 验证集样本数 |
+| `--num_test` | 1000 | 测试集样本数 |
+| `--batch_size` | 500 | 每批写入的样本数（控制内存峰值） |
+| `--seed` | 42 | 随机种子 |
+| `--skip_validation` | False | 跳过物理参数校验 |
+
+**输出目录结构：**
+
+```
+data/simulated/bio_diffraction_v1/
+├── config.json              # 完整生成配置快照（实验参数、噪声参数、标准化参数等）
+└── bio_diffraction_v1.h5    # HDF5 数据文件
+```
+
+**特性：**
+- **流式写入**：每批 500 样本写入一次，峰值内存 ~2.3GB（100k 样本）
+- **断点续传**：中断后重新运行同一命令，自动从断点恢复
+- **配置记录**：`config.json` 记录所有生成参数，方便实验对比
 
 ### 2. 运行测试
 
@@ -39,7 +67,7 @@ python -m pytest tests/ -v
 ### 3. 训练模型
 
 ```bash
-python scripts/main_pipeline.py train --data data/simulated/bio_diffraction_v1.h5 --checkpoint-dir experiments/exp_01
+python scripts/main_pipeline.py train --data data/simulated/bio_diffraction_v1/bio_diffraction_v1.h5 --checkpoint-dir experiments/exp_01
 ```
 
 ## 代码示例
@@ -95,7 +123,10 @@ DeepPhase-X/
 ├── data/                       # 数据目录
 │   ├── raw/                    # 原始实验数据 & Beamstop掩码
 │   │   └── beamstop_mask-585x585.mat
-│   └── simulated/              # 生成的H5数据集
+│   └── simulated/              # 生成的数据集（目录形式）
+│       └── bio_diffraction_v1/
+│           ├── config.json         # 完整生成配置快照
+│           └── bio_diffraction_v1.h5
 │
 ├── src/                        # 源代码
 │   ├── simulation/             # 物理仿真 & 生物衍射仿真流水线
@@ -124,7 +155,7 @@ DeepPhase-X/
 │       └── support.py          # 支撑估计
 │
 ├── scripts/                    # 执行脚本
-│   ├── generate_bio_dataset.py # 生物衍射数据集生成（主入口）
+│   ├── generate_bio_dataset.py # 生物衍射数据集生成（主入口，流式写入+断点续传）
 │   ├── main_pipeline.py        # 主训练/推理流水线
 │   ├── generate_diffraction_data.py  # PDB衍射数据生成
 │   └── pdb_fetcher.py          # PDB文件下载

@@ -309,6 +309,36 @@ def run_all_validations() -> Dict[str, Any]:
 # Utility Functions
 # =============================================================================
 
+def _make_serializable(obj: Any) -> Any:
+    """Convert config values to JSON-serializable types."""
+    if isinstance(obj, Path):
+        return str(obj)
+    if isinstance(obj, range):
+        return list(obj)
+    if isinstance(obj, np.integer):
+        return int(obj)
+    if isinstance(obj, np.floating):
+        return float(obj)
+    if isinstance(obj, np.ndarray):
+        return obj.tolist()
+    if isinstance(obj, dict):
+        return {k: _make_serializable(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_make_serializable(v) for v in obj]
+    return obj
+
+
+def get_full_config() -> Dict[str, Any]:
+    """Aggregate all config dicts into one serializable dict."""
+    return {
+        'experiment': _make_serializable(EXP_CONFIG),
+        'bacteria': _make_serializable(BACTERIA_CONFIG),
+        'augmentation': _make_serializable(AUGMENT_CONFIG),
+        'random_mask': _make_serializable(RANDOM_MASK_CONFIG),
+        'physical_parameters': _make_serializable(compute_physical_parameters()),
+    }
+
+
 def get_config_summary() -> str:
     """Get a summary string of the configuration."""
     params = compute_physical_parameters()
