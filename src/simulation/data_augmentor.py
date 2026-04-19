@@ -6,10 +6,10 @@ augment the bio sample density maps.
 """
 
 import numpy as np
-from scipy.ndimage import rotate, shift, zoom
 from typing import Optional
 
 from .bio_config import EXP_CONFIG, AUGMENT_CONFIG
+from .backend import get_xp, get_ndimage, to_cpu
 
 
 class DataAugmentor:
@@ -22,15 +22,20 @@ class DataAugmentor:
     3. Random scaling
     """
 
-    def __init__(self, seed: Optional[int] = None):
+    def __init__(self, seed: Optional[int] = None, use_gpu: bool = False):
         """
         Initialize the data augmentor.
 
         Args:
             seed: Random seed for reproducibility.
+            use_gpu: If True, use CuPy/CUDA for image transformations.
         """
         self.rng = np.random.default_rng(seed)
         self.grid_size = EXP_CONFIG['train_size']
+        self.use_gpu = use_gpu
+
+        self.xp = get_xp(use_gpu)
+        self.ndimage = get_ndimage(use_gpu)
 
     def augment(
         self,
@@ -50,6 +55,10 @@ class DataAugmentor:
         if seed is not None:
             self.rng = np.random.default_rng(seed)
 
+        xp = self.xp
+        if self.use_gpu:
+            obj = xp.asarray(obj)
+
         # Step 1: Random rotation
         obj = self._random_rotation(obj)
 
@@ -60,11 +69,14 @@ class DataAugmentor:
         obj = self._random_scaling(obj)
 
         # Ensure output is in valid range
-        obj = np.clip(obj, 0, 1).astype(np.float32)
+        obj = xp.clip(obj, 0, 1).astype(xp.float32)
+
+        if self.use_gpu:
+            obj = obj.get()
 
         return obj
 
-    def _random_rotation(self, obj: np.ndarray) -> np.ndarray:
+    def _random_rotation(self, obj):
         """
         Apply random rotation.
 
@@ -77,8 +89,8 @@ class DataAugmentor:
         angle = self.rng.uniform(*AUGMENT_CONFIG['rotation_range'])
         order = AUGMENT_CONFIG['rotation_order']
 
-        # Rotate using scipy
-        rotated = rotate(
+        # Rotate using ndimage (scipy or cupyx)
+        rotated = self.ndimage.rotate(
             obj,
             angle,
             reshape=False,  # Keep original shape
@@ -89,7 +101,7 @@ class DataAugmentor:
 
         return rotated
 
-    def _random_translation(self, obj: np.ndarray) -> np.ndarray:
+    def _random_translation(self, obj):
         """
         Apply random translation.
 
@@ -107,7 +119,7 @@ class DataAugmentor:
         shift_x = self.rng.uniform(-max_shift, max_shift)
 
         # Apply shift
-        translated = shift(
+        translated = self.ndimage.shift(
             obj,
             [shift_y, shift_x],
             order=1,         # Bilinear interpolation
@@ -117,7 +129,7 @@ class DataAugmentor:
 
         return translated
 
-    def _random_scaling(self, obj: np.ndarray) -> np.ndarray:
+    def _random_scaling(self, obj):
         """
         Apply random scaling.
 
@@ -127,6 +139,7 @@ class DataAugmentor:
         Returns:
             Scaled density map with original size.
         """
+        xp = self.xp
         scale = self.rng.uniform(*AUGMENT_CONFIG['scale_range'])
 
         # Calculate new size
@@ -135,10 +148,10 @@ class DataAugmentor:
         # Scale the image
         if scale != 1.0:
             # Use zoom to scale
-            scaled = zoom(obj, scale, order=1)
+            scaled = self.ndimage.zoom(obj, scale, order=1)
 
             # Create output array
-            result = np.zeros((self.grid_size, self.grid_size), dtype=np.float32)
+            result = xp.zeros((self.grid_size, self.grid_size), dtype=xp.float32)
 
             # Calculate placement (center the scaled image)
             h, w = scaled.shape

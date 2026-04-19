@@ -9,10 +9,10 @@ All PDB parsing, oversampling, and zero-padding logic is removed.
 """
 
 import numpy as np
-from numpy.fft import fft2, fftshift
 from typing import Dict, Any, Optional
 
 from .bio_config import EXP_CONFIG
+from .backend import get_xp, to_gpu, to_cpu
 
 
 class DiffractionSimulator:
@@ -23,10 +23,26 @@ class DiffractionSimulator:
     using Fourier transform with physical scale calibration.
     """
 
-    def __init__(self):
-        """Initialize the diffraction simulator."""
+    def __init__(self, use_gpu=False):
+        """Initialize the diffraction simulator.
+
+        Args:
+            use_gpu: If True, use CuPy/CUDA for FFT computation.
+        """
         self.train_size = EXP_CONFIG['train_size']
         self._physical_params = None
+        self.use_gpu = use_gpu
+
+        if use_gpu:
+            import cupy as xp
+            from cupy.fft import fft2, fftshift
+        else:
+            import numpy as xp
+            from numpy.fft import fft2, fftshift
+
+        self.xp = xp
+        self.fft2 = fft2
+        self.fftshift = fftshift
 
     def simulate(self, obj: np.ndarray) -> np.ndarray:
         """
@@ -42,18 +58,25 @@ class DiffractionSimulator:
         if obj.shape != (self.train_size, self.train_size):
             raise ValueError(f"Expected shape ({self.train_size}, {self.train_size}), got {obj.shape}")
 
+        xp = self.xp
+        if self.use_gpu:
+            obj = xp.asarray(obj)
+
         # Compute Fourier transform
         # A = FFT2(obj) gives complex amplitude
-        A = fft2(obj)
+        A = self.fft2(obj)
 
         # Shift zero frequency to center
-        A = fftshift(A)
+        A = self.fftshift(A)
 
         # Compute intensity (|A|^2)
-        I_clean = np.abs(A) ** 2
+        I_clean = xp.abs(A) ** 2
 
         # Ensure non-negative (should always be true for |A|^2)
-        I_clean = np.maximum(I_clean, 0).astype(np.float32)
+        I_clean = xp.maximum(I_clean, 0).astype(xp.float32)
+
+        if self.use_gpu:
+            I_clean = I_clean.get()
 
         return I_clean
 

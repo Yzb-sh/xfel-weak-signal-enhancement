@@ -11,10 +11,10 @@ Random masks simulate:
 """
 
 import numpy as np
-from scipy.ndimage import binary_dilation, binary_erosion
 from typing import Optional, Tuple
 
 from .bio_config import EXP_CONFIG, RANDOM_MASK_CONFIG
+from .backend import get_xp, get_ndimage, to_cpu
 
 
 class RandomMaskApplier:
@@ -25,15 +25,20 @@ class RandomMaskApplier:
     irregular blobs) that represent detector defects.
     """
 
-    def __init__(self, seed: Optional[int] = None):
+    def __init__(self, seed: Optional[int] = None, use_gpu: bool = False):
         """
         Initialize the random mask applier.
 
         Args:
             seed: Random seed for reproducibility.
+            use_gpu: If True, use CuPy/CUDA for mask operations.
         """
         self.rng = np.random.default_rng(seed)
         self.grid_size = EXP_CONFIG['train_size']
+        self.use_gpu = use_gpu
+
+        self.xp = get_xp(use_gpu)
+        self.ndimage = get_ndimage(use_gpu)
 
     def apply(
         self,
@@ -61,6 +66,7 @@ class RandomMaskApplier:
             prob = RANDOM_MASK_CONFIG['apply_probability']
 
         # Initialize empty mask
+        xp = self.xp
         mask_record = np.zeros((self.grid_size, self.grid_size), dtype=bool)
 
         # Decide whether to apply mask
@@ -68,27 +74,35 @@ class RandomMaskApplier:
             # No mask applied
             return I_clean.copy().astype(np.float32), mask_record
 
-        # Generate combined random mask
-        mask_record = self._generate_combined_mask()
+        # Generate combined random mask (on device if GPU)
+        mask_record_device = self._generate_combined_mask()
 
         # Apply mask (set masked regions to 0)
-        I_masked = I_clean.copy()
-        I_masked[mask_record] = 0.0
-        I_masked = I_masked.astype(np.float32)
+        if self.use_gpu:
+            I_masked = xp.asarray(I_clean.copy())
+            I_masked[mask_record_device] = 0.0
+            I_masked = I_masked.get().astype(np.float32)
+            mask_record = mask_record_device.get()
+        else:
+            I_masked = I_clean.copy()
+            I_masked[mask_record_device] = 0.0
+            I_masked = I_masked.astype(np.float32)
+            mask_record = mask_record_device
 
         return I_masked, mask_record
 
-    def _generate_combined_mask(self) -> np.ndarray:
+    def _generate_combined_mask(self):
         """
         Generate a combined mask from multiple random shapes.
 
         Returns:
-            Boolean mask where True = masked region.
+            Boolean mask where True = masked region (on device if GPU).
         """
+        xp = self.xp
         n_shapes = self.rng.integers(*RANDOM_MASK_CONFIG['n_shapes_range'])
         shape_types = RANDOM_MASK_CONFIG['shape_types']
 
-        combined_mask = np.zeros((self.grid_size, self.grid_size), dtype=bool)
+        combined_mask = xp.zeros((self.grid_size, self.grid_size), dtype=bool)
 
         for _ in range(n_shapes):
             shape_type = self.rng.choice(shape_types)
@@ -106,31 +120,33 @@ class RandomMaskApplier:
 
         return combined_mask
 
-    def _generate_circle_mask(self) -> np.ndarray:
+    def _generate_circle_mask(self):
         """
         Generate a random circular mask.
 
         Returns:
-            Boolean mask with circular shape.
+            Boolean mask with circular shape (on device if GPU).
         """
+        xp = self.xp
         radius = self.rng.integers(*RANDOM_MASK_CONFIG['circle_radius_range'])
 
         # Random center (can be partially outside image)
         cy = self.rng.integers(-radius, self.grid_size + radius)
         cx = self.rng.integers(-radius, self.grid_size + radius)
 
-        y, x = np.ogrid[:self.grid_size, :self.grid_size]
+        y, x = xp.ogrid[:self.grid_size, :self.grid_size]
         mask = ((y - cy) ** 2 + (x - cx) ** 2) <= radius ** 2
 
         return mask
 
-    def _generate_rectangle_mask(self) -> np.ndarray:
+    def _generate_rectangle_mask(self):
         """
         Generate a random rectangular mask.
 
         Returns:
-            Boolean mask with rectangular shape.
+            Boolean mask with rectangular shape (on device if GPU).
         """
+        xp = self.xp
         size = self.rng.integers(*RANDOM_MASK_CONFIG['rect_size_range'])
 
         # Random position
@@ -145,17 +161,14 @@ class RandomMaskApplier:
         # Random rotation
         angle = self.rng.uniform(0, 90)
 
-        # Create rotated rectangle
-        mask = np.zeros((self.grid_size, self.grid_size), dtype=bool)
-
         # Simple rotation using coordinates
         center_y = y_start + height // 2
         center_x = x_start + width // 2
 
-        angle_rad = np.radians(angle)
-        cos_a, sin_a = np.cos(angle_rad), np.sin(angle_rad)
+        angle_rad = xp.radians(angle)
+        cos_a, sin_a = xp.cos(angle_rad), xp.sin(angle_rad)
 
-        y_coords, x_coords = np.mgrid[:self.grid_size, :self.grid_size]
+        y_coords, x_coords = xp.mgrid[:self.grid_size, :self.grid_size]
         y_rel = y_coords - center_y
         x_rel = x_coords - center_x
 
@@ -164,17 +177,20 @@ class RandomMaskApplier:
         x_rot = x_rel * cos_a - y_rel * sin_a
 
         # Check if in rectangle
-        mask = (np.abs(x_rot) <= width // 2) & (np.abs(y_rot) <= height // 2)
+        mask = (xp.abs(x_rot) <= width // 2) & (xp.abs(y_rot) <= height // 2)
 
         return mask
 
-    def _generate_irregular_mask(self) -> np.ndarray:
+    def _generate_irregular_mask(self):
         """
         Generate an irregular blob-shaped mask.
 
         Returns:
-            Boolean mask with irregular shape.
+            Boolean mask with irregular shape (on device if GPU).
         """
+        xp = self.xp
+        ndimage = self.ndimage
+
         n_points = self.rng.integers(*RANDOM_MASK_CONFIG['irregular_points_range'])
 
         # Random center
@@ -193,7 +209,7 @@ class RandomMaskApplier:
             points.append((int(py), int(px)))
 
         # Create convex hull-like mask by filling the polygon
-        mask = np.zeros((self.grid_size, self.grid_size), dtype=bool)
+        mask = xp.zeros((self.grid_size, self.grid_size), dtype=bool)
 
         if len(points) >= 3:
             # Sort points by angle from centroid
@@ -210,19 +226,24 @@ class RandomMaskApplier:
                     [p[1] for p in sorted_points],
                     shape=(self.grid_size, self.grid_size)
                 )
-                mask[rr, cc] = True
+                mask_np = np.zeros((self.grid_size, self.grid_size), dtype=bool)
+                mask_np[rr, cc] = True
+                if self.use_gpu:
+                    mask = xp.asarray(mask_np)
+                else:
+                    mask = mask_np
             except ImportError:
                 # Fallback if skimage not available: use simple convex hull approximation
-                y_coords, x_coords = np.ogrid[:self.grid_size, :self.grid_size]
+                y_coords, x_coords = xp.ogrid[:self.grid_size, :self.grid_size]
                 for py, px in points:
-                    dist = np.sqrt((y_coords - py) ** 2 + (x_coords - px) ** 2)
+                    dist = xp.sqrt((y_coords - py) ** 2 + (x_coords - px) ** 2)
                     mask |= (dist < base_radius * 0.5)
 
         # Add some irregularity by dilation/erosion
         if self.rng.random() > 0.5:
-            mask = binary_dilation(mask, iterations=1)
+            mask = ndimage.binary_dilation(mask, iterations=1)
         if self.rng.random() > 0.5:
-            mask = binary_erosion(mask, iterations=1)
+            mask = ndimage.binary_erosion(mask, iterations=1)
 
         return mask
 

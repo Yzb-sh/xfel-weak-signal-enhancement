@@ -10,11 +10,11 @@ suitable for FFT-based diffraction simulation.
 """
 
 import numpy as np
-from scipy.ndimage import rotate, gaussian_filter, zoom
 from typing import Optional, Tuple, List
 from pathlib import Path
 
 from .bio_config import EXP_CONFIG, BACTERIA_CONFIG
+from .backend import get_xp, get_ndimage, to_gpu, to_cpu
 
 
 class BioSampleGenerator:
@@ -29,7 +29,8 @@ class BioSampleGenerator:
     - Multiple cell states (normal, dividing, curved)
     """
 
-    def __init__(self, seed: Optional[int] = None, sample_size_px: Optional[int] = None):
+    def __init__(self, seed: Optional[int] = None, sample_size_px: Optional[int] = None,
+                 use_gpu: bool = False):
         """
         Initialize the bio sample generator.
 
@@ -38,10 +39,15 @@ class BioSampleGenerator:
             sample_size_px: Target max bacteria length in pixels.
                             None = use original BACTERIA_CONFIG ranges.
                             Smaller values produce smaller bacteria with wider diffraction features.
+            use_gpu: If True, use CuPy/CUDA for array operations.
         """
         self.rng = np.random.default_rng(seed)
         self.grid_size = EXP_CONFIG['train_size']
         self.sample_size_px = sample_size_px
+        self.use_gpu = use_gpu
+
+        self.xp = get_xp(use_gpu)
+        self.ndimage = get_ndimage(use_gpu)
 
         # Compute scale factor relative to reference size (midpoint of default 80-200 range)
         if sample_size_px is not None:
@@ -86,7 +92,6 @@ class BioSampleGenerator:
                 'vacuole_value_threshold': BACTERIA_CONFIG['vacuole_value_threshold'],
             }
         else:
-            sf = 1.0
             return {
                 'length_range_px': BACTERIA_CONFIG['length_range_px'],
                 'diameter_range_px': BACTERIA_CONFIG['diameter_range_px'],
@@ -140,9 +145,10 @@ class BioSampleGenerator:
         obj = self._add_surface_noise(obj)
 
         # Ensure values are in [0, 1]
-        obj = np.clip(obj, 0, 1).astype(np.float32)
+        xp = self.xp
+        obj = xp.clip(obj, 0, 1).astype(xp.float32)
 
-        return obj
+        return to_cpu(obj)
 
     def _create_capsule_2d(
         self,
@@ -150,7 +156,7 @@ class BioSampleGenerator:
         diameter: float,
         center: Tuple[float, float],
         angle: float
-    ) -> np.ndarray:
+    ):
         """
         Create a 2D capsule shape (rectangle + semicircular ends).
 
@@ -161,21 +167,21 @@ class BioSampleGenerator:
             angle: Rotation angle in degrees.
 
         Returns:
-            2D binary mask of the capsule.
+            2D binary mask of the capsule (on device if GPU).
         """
-        mask = np.zeros((self.grid_size, self.grid_size), dtype=np.float32)
+        xp = self.xp
 
         # Create in local coordinates
         # Local coordinate system: capsule along x-axis
-        y_coords, x_coords = np.ogrid[:self.grid_size, :self.grid_size]
+        y_coords, x_coords = xp.ogrid[:self.grid_size, :self.grid_size]
 
         # Translate to center
         y_centered = y_coords - center[0]
         x_centered = x_coords - center[1]
 
         # Rotate coordinates (negative angle to rotate shape)
-        angle_rad = np.radians(-angle)
-        cos_a, sin_a = np.cos(angle_rad), np.sin(angle_rad)
+        angle_rad = xp.radians(-angle)
+        cos_a, sin_a = xp.cos(angle_rad), xp.sin(angle_rad)
         x_rot = x_centered * cos_a - y_centered * sin_a
         y_rot = x_centered * sin_a + y_centered * cos_a
 
@@ -184,25 +190,25 @@ class BioSampleGenerator:
 
         # Capsule: rectangle part + two semicircular caps
         if half_length > 0:
-            rect_mask = (np.abs(x_rot) <= half_length) & (np.abs(y_rot) <= radius)
+            rect_mask = (xp.abs(x_rot) <= half_length) & (xp.abs(y_rot) <= radius)
         else:
-            rect_mask = np.zeros_like(mask, dtype=bool)
+            rect_mask = xp.zeros((self.grid_size, self.grid_size), dtype=bool)
 
         # Left cap
         left_center_x = -half_length if half_length > 0 else 0
-        left_dist = np.sqrt((x_rot - left_center_x)**2 + y_rot**2)
+        left_dist = xp.sqrt((x_rot - left_center_x)**2 + y_rot**2)
         left_cap = (left_dist <= radius) & (x_rot <= left_center_x)
 
         # Right cap
         right_center_x = half_length if half_length > 0 else 0
-        right_dist = np.sqrt((x_rot - right_center_x)**2 + y_rot**2)
+        right_dist = xp.sqrt((x_rot - right_center_x)**2 + y_rot**2)
         right_cap = (right_dist <= radius) & (x_rot >= right_center_x)
 
-        mask = (rect_mask | left_cap | right_cap).astype(np.float32)
+        mask = (rect_mask | left_cap | right_cap).astype(xp.float32)
 
         return mask
 
-    def _generate_normal_cell(self, cfg: dict) -> np.ndarray:
+    def _generate_normal_cell(self, cfg: dict):
         """Generate a normal single cell."""
         # Random dimensions directly in pixels
         length_px = self.rng.uniform(*cfg['length_range_px'])
@@ -224,8 +230,10 @@ class BioSampleGenerator:
 
         return obj
 
-    def _generate_dividing_cell(self, cfg: dict) -> np.ndarray:
+    def _generate_dividing_cell(self, cfg: dict):
         """Generate a dividing cell (two connected capsules)."""
+        xp = self.xp
+
         # Generate dimensions for both daughter cells
         length1_px = self.rng.uniform(*cfg['length_range_px']) * 0.7
         length2_px = self.rng.uniform(*cfg['length_range_px']) * 0.7
@@ -260,7 +268,7 @@ class BioSampleGenerator:
         )
 
         # Combine cells
-        obj = np.maximum(obj1, obj2)
+        obj = xp.maximum(obj1, obj2)
 
         # Add constriction at division site
         obj = self._add_division_constriction(obj, cfg)
@@ -269,14 +277,16 @@ class BioSampleGenerator:
 
         return obj
 
-    def _generate_curved_cell(self, cfg: dict) -> np.ndarray:
+    def _generate_curved_cell(self, cfg: dict):
         """Generate a curved/arc-shaped cell."""
+        xp = self.xp
+
         # Random dimensions directly in pixels
         length_px = self.rng.uniform(*cfg['length_range_px'])
         diameter_px = self.rng.uniform(*cfg['diameter_range_px'])
 
         # Create curved cell using arc segments
-        obj = np.zeros((self.grid_size, self.grid_size), dtype=np.float32)
+        obj = xp.zeros((self.grid_size, self.grid_size), dtype=xp.float32)
 
         # Arc parameters
         arc_angle = self.rng.uniform(30, 90)  # degrees of arc
@@ -306,13 +316,13 @@ class BioSampleGenerator:
                 (y_pos, x_pos),
                 local_angle
             )
-            obj = np.maximum(obj, segment)
+            obj = xp.maximum(obj, segment)
 
         obj = self._add_membrane_gradient(obj)
 
         return obj
 
-    def _add_membrane_gradient(self, obj: np.ndarray) -> np.ndarray:
+    def _add_membrane_gradient(self, obj):
         """
         Add density gradient to simulate membrane (higher density at edges).
 
@@ -320,31 +330,37 @@ class BioSampleGenerator:
             obj: Input density map.
 
         Returns:
-            Density map with membrane gradient.
+            Density map with membrane gradient (on device if GPU).
         """
+        xp = self.xp
+        ndimage = self.ndimage
+
         # Create edge-enhanced version
-        edge = gaussian_filter(obj, sigma=1)
+        edge = ndimage.gaussian_filter(obj, sigma=1)
         edge_gradient = obj - edge
 
         # Combine: original + edge enhancement
-        result = obj + 0.2 * np.maximum(edge_gradient, 0)
+        result = obj + 0.2 * xp.maximum(edge_gradient, 0)
 
         # Normalize
-        if result.max() > 0:
-            result = result / result.max()
+        max_val = result.max()
+        if max_val > 0:
+            result = result / max_val
 
         return result
 
-    def _add_division_constriction(self, obj: np.ndarray, cfg: dict) -> np.ndarray:
+    def _add_division_constriction(self, obj, cfg: dict):
         """Add constriction at division site."""
+        xp = self.xp
+
         # Find the center and add a constriction
         center = self.grid_size // 2
         constriction_width = self.rng.uniform(*cfg['constriction_width_range'])
         constriction_depth = self.rng.uniform(0.3, 0.6)
 
         # Create constriction mask
-        y_coords, x_coords = np.ogrid[:self.grid_size, :self.grid_size]
-        constriction_region = np.abs(x_coords - center) < constriction_width / 2
+        y_coords, x_coords = xp.ogrid[:self.grid_size, :self.grid_size]
+        constriction_region = xp.abs(x_coords - center) < constriction_width / 2
 
         # Apply constriction
         result = obj.copy()
@@ -352,7 +368,7 @@ class BioSampleGenerator:
 
         return result
 
-    def _add_gaussian_spots(self, obj: np.ndarray, n_spots: int, cfg: dict) -> np.ndarray:
+    def _add_gaussian_spots(self, obj, n_spots: int, cfg: dict):
         """
         Add internal Gaussian spots to simulate intracellular structures.
 
@@ -362,8 +378,9 @@ class BioSampleGenerator:
             cfg: Scaled configuration dictionary.
 
         Returns:
-            Density map with Gaussian spots.
+            Density map with Gaussian spots (on device if GPU).
         """
+        xp = self.xp
         result = obj.copy()
 
         # Find region where bacteria exists
@@ -371,10 +388,11 @@ class BioSampleGenerator:
         if not bacteria_mask.any():
             return result
 
-        # Get bacteria region bounds
-        y_indices, x_indices = np.where(bacteria_mask)
-        y_min, y_max = y_indices.min(), y_indices.max()
-        x_min, x_max = x_indices.min(), x_indices.max()
+        # Get bacteria region bounds (on CPU for indexing)
+        bacteria_mask_np = to_cpu(bacteria_mask)
+        y_indices, x_indices = np.where(bacteria_mask_np)
+        y_min, y_max = int(y_indices.min()), int(y_indices.max())
+        x_min, x_max = int(x_indices.min()), int(x_indices.max())
 
         # Margin proportional to bacteria size
         margin = max(2, int(5 * self.scale_factor))
@@ -389,20 +407,21 @@ class BioSampleGenerator:
             intensity = self.rng.uniform(0.1, 0.3)
 
             # Create Gaussian spot
-            y_coords, x_coords = np.ogrid[:self.grid_size, :self.grid_size]
-            spot = np.exp(-((y_coords - cy)**2 + (x_coords - cx)**2) / (2 * sigma**2))
+            y_coords, x_coords = xp.ogrid[:self.grid_size, :self.grid_size]
+            spot = xp.exp(-((y_coords - cy)**2 + (x_coords - cx)**2) / (2 * sigma**2))
             spot = spot * intensity
 
             # Only add where bacteria exists
             result[bacteria_mask] += spot[bacteria_mask]
 
         # Normalize to [0, 1]
-        if result.max() > 0:
-            result = result / result.max()
+        max_val = result.max()
+        if max_val > 0:
+            result = result / max_val
 
         return result
 
-    def _add_vacuoles(self, obj: np.ndarray, n_vacuoles: int, cfg: dict) -> np.ndarray:
+    def _add_vacuoles(self, obj, n_vacuoles: int, cfg: dict):
         """
         Add circular vacuoles (low density regions).
 
@@ -412,8 +431,9 @@ class BioSampleGenerator:
             cfg: Scaled configuration dictionary.
 
         Returns:
-            Density map with vacuoles.
+            Density map with vacuoles (on device if GPU).
         """
+        xp = self.xp
         result = obj.copy()
 
         # Find region where bacteria exists
@@ -421,10 +441,11 @@ class BioSampleGenerator:
         if not bacteria_mask.any():
             return result
 
-        # Get bacteria region bounds
-        y_indices, x_indices = np.where(bacteria_mask)
-        y_min, y_max = y_indices.min(), y_indices.max()
-        x_min, x_max = x_indices.min(), x_indices.max()
+        # Get bacteria region bounds (on CPU for indexing)
+        bacteria_mask_np = to_cpu(bacteria_mask)
+        y_indices, x_indices = np.where(bacteria_mask_np)
+        y_min, y_max = int(y_indices.min()), int(y_indices.max())
+        x_min, x_max = int(x_indices.min()), int(x_indices.max())
 
         threshold = cfg['vacuole_value_threshold']
 
@@ -440,15 +461,15 @@ class BioSampleGenerator:
             radius = self.rng.uniform(*cfg['vacuole_radius_range'])
 
             # Create circular vacuole
-            y_coords, x_coords = np.ogrid[:self.grid_size, :self.grid_size]
+            y_coords, x_coords = xp.ogrid[:self.grid_size, :self.grid_size]
             vacuole_mask = ((y_coords - cy)**2 + (x_coords - cx)**2) <= radius**2
 
             # Reduce density in vacuole region
-            result[vacuole_mask] = np.minimum(result[vacuole_mask], threshold)
+            result[vacuole_mask] = xp.minimum(result[vacuole_mask], threshold)
 
         return result
 
-    def _add_surface_noise(self, obj: np.ndarray) -> np.ndarray:
+    def _add_surface_noise(self, obj):
         """
         Add Perlin-like noise to simulate irregular cell surface.
 
@@ -456,8 +477,11 @@ class BioSampleGenerator:
             obj: Input density map.
 
         Returns:
-            Density map with surface irregularities.
+            Density map with surface irregularities (on device if GPU).
         """
+        xp = self.xp
+        ndimage = self.ndimage
+
         # Get noise scale
         noise_scale = self.rng.uniform(*BACTERIA_CONFIG['perlin_noise_scale_range'])
 
@@ -465,24 +489,24 @@ class BioSampleGenerator:
         result = obj.copy()
 
         # Create multi-scale noise
-        noise = np.zeros_like(obj)
+        noise = xp.zeros_like(obj)
         for octave in range(3):
             scale = noise_scale * (2 ** octave)
             amplitude = 1.0 / (octave + 1)
 
-            # Low-frequency noise
+            # Low-frequency noise (generate on CPU, transfer to device)
             small_size = max(1, int(self.grid_size * scale))
             small_noise = self.rng.normal(0, 1, (small_size, small_size))
 
             # Upsample to full size
             zoom_factor = self.grid_size / small_size
-            upsampled = zoom(small_noise, zoom_factor, order=1)
+            upsampled = ndimage.zoom(to_gpu(small_noise, xp), zoom_factor, order=1)
 
             # Ensure same size
             if upsampled.shape[0] > self.grid_size:
                 upsampled = upsampled[:self.grid_size, :self.grid_size]
             elif upsampled.shape[0] < self.grid_size:
-                padded = np.zeros((self.grid_size, self.grid_size))
+                padded = xp.zeros((self.grid_size, self.grid_size))
                 padded[:upsampled.shape[0], :upsampled.shape[1]] = upsampled
                 upsampled = padded
 
@@ -498,24 +522,28 @@ class BioSampleGenerator:
         result = result * (1 - edge_strength * edge) + result * edge * noise * edge_strength + result * (1 - edge)
 
         # Smooth the result slightly
-        result = gaussian_filter(result, sigma=0.5)
+        result = ndimage.gaussian_filter(result, sigma=0.5)
 
         # Normalize
-        if result.max() > 0:
-            result = result / result.max()
+        max_val = result.max()
+        if max_val > 0:
+            result = result / max_val
 
         return result
 
-    def _detect_edges(self, obj: np.ndarray) -> np.ndarray:
+    def _detect_edges(self, obj):
         """Detect edges using gradient magnitude."""
+        xp = self.xp
+
         # Sobel-like edge detection
-        gy = np.gradient(obj, axis=0)
-        gx = np.gradient(obj, axis=1)
-        edge = np.sqrt(gx**2 + gy**2)
+        gy = xp.gradient(obj, axis=0)
+        gx = xp.gradient(obj, axis=1)
+        edge = xp.sqrt(gx**2 + gy**2)
 
         # Normalize
-        if edge.max() > 0:
-            edge = edge / edge.max()
+        max_val = edge.max()
+        if max_val > 0:
+            edge = edge / max_val
 
         return edge
 
