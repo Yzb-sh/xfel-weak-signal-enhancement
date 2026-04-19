@@ -46,6 +46,9 @@ EXP_CONFIG: Dict[str, Any] = {
     'train_size': 585,                          # training data size (585x585)
     'validation_size': 100,                     # validation set size
     'test_size': 100,                           # test set size
+
+    # ===== GPU Configuration =====
+    'USE_GPU': False,                           # Enable GPU acceleration (requires CuPy + CUDA)
 }
 
 # =============================================================================

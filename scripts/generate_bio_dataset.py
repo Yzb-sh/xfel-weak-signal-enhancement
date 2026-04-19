@@ -203,16 +203,17 @@ def _clean_metadata(meta: Dict[str, Any]) -> Dict[str, Any]:
 class DatasetGenerator:
     """Complete pipeline for generating bio diffraction datasets."""
 
-    def __init__(self, seed: int = 42):
+    def __init__(self, seed: int = 42, use_gpu: bool = False):
         self.seed = seed
         self.rng = np.random.default_rng(seed)
         self.sample_size_px_config = BACTERIA_CONFIG.get('sample_size_px', None)
+        self.use_gpu = use_gpu
 
-        self.augmentor = DataAugmentor(seed=seed)
-        self.diffraction_sim = DiffractionSimulator()
+        self.augmentor = DataAugmentor(seed=seed, use_gpu=use_gpu)
+        self.diffraction_sim = DiffractionSimulator(use_gpu=use_gpu)
         self.intensity_norm = IntensityNormalizer()
-        self.random_mask = RandomMaskApplier(seed=seed)
-        self.noise_beamstop = NoiseAndBeamstopApplier(seed=seed)
+        self.random_mask = RandomMaskApplier(seed=seed, use_gpu=use_gpu)
+        self.noise_beamstop = NoiseAndBeamstopApplier(seed=seed, use_gpu=use_gpu)
 
         # Reusable bio generator
         self._bio_generator = None
@@ -221,7 +222,7 @@ class DatasetGenerator:
     def _get_bio_generator(self, sample_size_px: Optional[int]) -> BioSampleGenerator:
         """Get or create a BioSampleGenerator, reusing when possible."""
         if self._bio_generator is None or sample_size_px != self._last_sample_size_px:
-            self._bio_generator = BioSampleGenerator(sample_size_px=sample_size_px)
+            self._bio_generator = BioSampleGenerator(sample_size_px=sample_size_px, use_gpu=self.use_gpu)
             self._last_sample_size_px = sample_size_px
         return self._bio_generator
 
@@ -428,7 +429,8 @@ def generate_dataset(
     output_dir: Path,
     seed: int = 42,
     batch_size: int = 500,
-    run_validation: bool = True
+    run_validation: bool = True,
+    use_gpu: bool = False
 ) -> Dict[str, Any]:
     """Generate the complete bio diffraction dataset with streaming write."""
     start_time = time.time()
@@ -440,6 +442,17 @@ def generate_dataset(
     print("Bio Diffraction Dataset Generator")
     print("=" * 60)
     print(get_config_summary())
+
+    # GPU check
+    if use_gpu:
+        from src.simulation.backend import check_gpu_available
+        ok, msg = check_gpu_available()
+        if not ok:
+            print(f"\nERROR: GPU requested but not available: {msg}")
+            sys.exit(1)
+        print(f"\nGPU acceleration enabled: {msg}")
+    else:
+        print("\nRunning on CPU.")
 
     if run_validation:
         print("\nRunning physical validations...")
@@ -465,7 +478,7 @@ def generate_dataset(
         print(f"\nResuming from state: train={state.train_completed}, "
               f"val={state.val_completed}, test={state.test_completed}")
 
-    generator = DatasetGenerator(seed=seed)
+    generator = DatasetGenerator(seed=seed, use_gpu=use_gpu)
 
     with h5py.File(h5_file_path, 'a') as h5f:
         # --- Pass 1: Generate raw data + compute Welford stats ---
@@ -613,6 +626,10 @@ def main():
         '--skip_validation', action='store_true',
         help='Skip physical validation'
     )
+    parser.add_argument(
+        '--use_gpu', action='store_true',
+        help='Enable GPU acceleration (requires CuPy + CUDA)'
+    )
 
     args = parser.parse_args()
     project_root = Path(__file__).parent.parent
@@ -641,7 +658,8 @@ def main():
         output_dir=output_dir,
         seed=args.seed,
         batch_size=args.batch_size,
-        run_validation=not args.skip_validation
+        run_validation=not args.skip_validation,
+        use_gpu=args.use_gpu
     )
 
 

@@ -10,12 +10,12 @@ This module:
 
 import numpy as np
 from scipy.io import loadmat
-from scipy.ndimage import gaussian_filter, distance_transform_edt
 from typing import Optional, Tuple, Dict, Any
 from pathlib import Path
 
 from .noise_model import AnalyticNoiseModel
 from .bio_config import EXP_CONFIG, BASE_DIR
+from .backend import get_xp, get_ndimage, to_gpu, to_cpu
 
 
 class NoiseAndBeamstopApplier:
@@ -33,18 +33,23 @@ class NoiseAndBeamstopApplier:
     - Gradient transition at edges
     """
 
-    def __init__(self, seed: Optional[int] = None):
+    def __init__(self, seed: Optional[int] = None, use_gpu: bool = False):
         """
         Initialize the noise and beamstop applier.
 
         Args:
             seed: Random seed for reproducibility.
+            use_gpu: If True, use CuPy/CUDA for beamstop operations.
         """
         self.rng = np.random.default_rng(seed)
         self.noise_model = AnalyticNoiseModel(seed=seed)
         self.grid_size = EXP_CONFIG['train_size']
         self._beamstop_mask = None
         self._beamstop_gradient = None
+        self.use_gpu = use_gpu
+
+        self.xp = get_xp(use_gpu)
+        self.ndimage = get_ndimage(use_gpu)
 
     def apply(
         self,
@@ -289,32 +294,35 @@ class NoiseAndBeamstopApplier:
 
     def _create_beamstop_gradient(
         self,
-        base_mask: np.ndarray,
+        base_mask,
         gradient_width: Optional[int] = None
-    ) -> np.ndarray:
+    ):
         """
         Create gradient transition at beam stop edges.
 
         Args:
-            base_mask: Binary beam stop mask.
+            base_mask: Binary beam stop mask (numpy or cupy array).
             gradient_width: Width of gradient in pixels. Random if None.
 
         Returns:
             Gradient mask (0 = fully blocked, 1 = fully clear).
         """
+        xp = self.xp
+        ndimage = self.ndimage
+
         # Decide whether to apply gradient or use hard edge
         if gradient_width is None:
             if self.rng.random() < EXP_CONFIG.get('beamstop_no_gradient_prob', 0.0):
                 # No gradient — hard edge (binary mask)
-                gradient_mask = (1 - base_mask).astype(np.float32)
+                gradient_mask = (1 - base_mask).astype(xp.float32)
                 return gradient_mask
             gradient_width = self.rng.integers(*EXP_CONFIG['beamstop_gradient_width_range'])
 
         # Distance from blocked region
-        distance = distance_transform_edt(1 - base_mask)
+        distance = ndimage.distance_transform_edt(1 - base_mask)
 
         # Create gradient
-        gradient_mask = np.clip(distance / gradient_width, 0, 1).astype(np.float32)
+        gradient_mask = xp.clip(distance / gradient_width, 0, 1).astype(xp.float32)
 
         # Blocked region is 0
         gradient_mask[base_mask > 0.5] = 0
@@ -334,17 +342,36 @@ class NoiseAndBeamstopApplier:
         Returns:
             Tuple of (masked intensity, final beamstop mask).
         """
-        # Load base mask
-        base_mask = self.load_beamstop_mask()
+        xp = self.xp
+
+        # Load base mask (always from CPU .mat file)
+        base_mask_cpu = self.load_beamstop_mask()
+
+        # Transfer to GPU if needed
+        if self.use_gpu:
+            base_mask = xp.asarray(base_mask_cpu)
+        else:
+            base_mask = base_mask_cpu
 
         # Create gradient
         gradient_mask = self._create_beamstop_gradient(base_mask)
 
+        # Transfer I to GPU if needed
+        if self.use_gpu:
+            I_device = xp.asarray(I)
+        else:
+            I_device = I
+
         # Apply gradient
-        I_masked = I * gradient_mask
+        I_masked = I_device * gradient_mask
 
         # Final binary mask for output
         final_mask = base_mask > 0.5
+
+        # Transfer back to CPU
+        if self.use_gpu:
+            I_masked = I_masked.get()
+            final_mask = final_mask.get()
 
         return I_masked.astype(np.float32), final_mask
 
