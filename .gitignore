@@ -61,3 +61,9 @@ logs/
 # OS
 .DS_Store
 Thumbs.db
+
+# Temporary and working directories
+temp_visualization/
+reference/
+data/simulated/
+tests/

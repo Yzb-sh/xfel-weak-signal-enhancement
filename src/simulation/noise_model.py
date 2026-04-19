@@ -8,8 +8,8 @@ from dataclasses import dataclass
 @dataclass
 class NoiseParameters:
     """Parameters for noise generation."""
-    exposure_level: float = 100.0  # Mean photon count at max intensity
-    readout_noise: float = 2.0     # Gaussian readout noise std
+    exposure_level: float = 100.0  # Total scattered photon count (I_sc)
+    readout_noise: float = 2.0     # Gaussian readout noise std (ADU)
     dark_current: float = 0.1      # Dark current (counts/pixel)
     quantum_efficiency: float = 0.9  # Detector quantum efficiency
 
@@ -44,21 +44,21 @@ class AnalyticNoiseModel:
         Models photon counting statistics where variance equals mean.
         
         Args:
-            intensity: Clean intensity pattern (normalized 0-1).
-            exposure_level: Mean photon count at maximum intensity.
-        
+            intensity: Normalized intensity pattern (sum=1, photon probability distribution).
+            exposure_level: Total scattered photon count (I_sc).
+
         Returns:
-            Noisy intensity with Poisson statistics.
+            Noisy intensity (photon counts per pixel).
         """
-        # Scale to photon counts
+        # Expected photon count at each pixel: λ_i = P_i × I_sc
         photon_counts = intensity * exposure_level
-        
+
         # Ensure non-negative
         photon_counts = np.maximum(photon_counts, 0)
-        
-        # Apply Poisson sampling
+
+        # Sample from Poisson distribution: N_i ~ Poisson(λ_i)
         noisy = self.rng.poisson(photon_counts).astype(np.float64)
-        
+
         return noisy
     
     def add_gaussian_noise(
@@ -97,13 +97,13 @@ class AnalyticNoiseModel:
         2. Gaussian noise from detector readout
         
         Args:
-            intensity: Clean intensity pattern (normalized 0-1).
-            exposure_level: Mean photon count at maximum intensity.
-            readout_noise: Standard deviation of readout noise.
+            intensity: Normalized intensity pattern (sum=1, photon probability distribution).
+            exposure_level: Total scattered photon count (I_sc).
+            readout_noise: Standard deviation of readout noise (ADU).
             clip_negative: Whether to clip negative values to zero.
-        
+
         Returns:
-            Noisy intensity pattern.
+            Noisy intensity pattern (photon counts + readout noise).
         """
         # Apply Poisson noise first
         noisy = self.add_poisson_noise(intensity, exposure_level)
@@ -132,7 +132,7 @@ class AnalyticNoiseModel:
         - Gaussian readout noise
         
         Args:
-            intensity: Clean intensity pattern (normalized 0-1).
+            intensity: Normalized intensity pattern (sum=1, photon probability distribution).
             params: Noise parameters. Uses defaults if None.
         
         Returns:
@@ -169,9 +169,9 @@ class AnalyticNoiseModel:
         SNR = signal / sqrt(signal + readout_noise^2)
         
         Args:
-            intensity: Clean intensity pattern (normalized 0-1).
-            exposure_level: Mean photon count at maximum intensity.
-            readout_noise: Standard deviation of readout noise.
+            intensity: Normalized intensity pattern (sum=1, photon probability distribution).
+            exposure_level: Total scattered photon count (I_sc).
+            readout_noise: Standard deviation of readout noise (ADU).
         
         Returns:
             SNR map.
@@ -193,8 +193,8 @@ class AnalyticNoiseModel:
         Useful for curriculum learning with increasing difficulty.
         
         Args:
-            intensity: Clean intensity pattern.
-            exposure_levels: List of exposure levels.
+            intensity: Normalized intensity pattern (sum=1, photon probability distribution).
+            exposure_levels: List of total photon counts (I_sc values).
             readout_noise: Readout noise std.
         
         Returns:

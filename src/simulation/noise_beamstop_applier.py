@@ -61,7 +61,7 @@ class NoiseAndBeamstopApplier:
         Returns:
             Tuple of:
                 - I_noisy: Noisy intensity with beam stop applied
-                - beamstop_mask: Boolean mask where True = blocked
+                - combined_mask: Boolean mask (beamstop | bad pixels | bad lines)
                 - I_sc: Total photon count used for this sample
                 - metadata: Dictionary with noise parameters
         """
@@ -72,7 +72,9 @@ class NoiseAndBeamstopApplier:
         metadata = {}
 
         # Step 1: Apply Poisson + Gaussian noise
-        I_sc = self.rng.uniform(*EXP_CONFIG['poisson_I_sc_range'])
+        # Log-uniform sampling: ensures uniform coverage across orders of magnitude
+        log_low, log_high = np.log10(EXP_CONFIG['poisson_I_sc_range'][0]), np.log10(EXP_CONFIG['poisson_I_sc_range'][1])
+        I_sc = 10 ** self.rng.uniform(log_low, log_high)
         I_noisy = self.noise_model.add_poisson_gaussian(
             I_normalized,
             exposure_level=I_sc,
@@ -97,7 +99,94 @@ class NoiseAndBeamstopApplier:
         I_noisy, beamstop_mask = self._apply_beamstop(I_noisy)
         metadata['beamstop_masked_pixels'] = np.sum(beamstop_mask)
 
-        return I_noisy, beamstop_mask, I_sc, metadata
+        # Combine all masks
+        combined_mask = beamstop_mask | bad_pixel_mask | bad_line_mask
+
+        return I_noisy, combined_mask, I_sc, metadata
+
+    def apply_noise_only(
+        self,
+        I_normalized: np.ndarray,
+        seed: Optional[int] = None
+    ) -> Tuple[np.ndarray, float, Dict[str, Any], np.ndarray]:
+        """
+        Apply Poisson + Gaussian noise only, without beam stop mask.
+
+        This method is used when you want to add noise before applying
+        random detector masks (RandomMaskApplier), following the correct
+        physical pipeline: Normalize -> Noise -> Defects -> Beamstop.
+
+        Args:
+            I_normalized: Normalized intensity (sum = 1).
+            seed: Optional seed to override initialization seed.
+
+        Returns:
+            Tuple of:
+                - I_noisy: Noisy intensity without beam stop
+                - I_sc: Total photon count used for this sample
+                - metadata: Dictionary with noise parameters
+                - defect_mask: Boolean mask of bad pixels and bad lines
+        """
+        if seed is not None:
+            self.rng = np.random.default_rng(seed)
+            self.noise_model = AnalyticNoiseModel(seed=seed)
+
+        metadata = {}
+
+        # Step 1: Apply Poisson + Gaussian noise
+        # Log-uniform sampling: ensures uniform coverage across orders of magnitude
+        log_low, log_high = np.log10(EXP_CONFIG['poisson_I_sc_range'][0]), np.log10(EXP_CONFIG['poisson_I_sc_range'][1])
+        I_sc = 10 ** self.rng.uniform(log_low, log_high)
+        I_noisy = self.noise_model.add_poisson_gaussian(
+            I_normalized,
+            exposure_level=I_sc,
+            readout_noise=EXP_CONFIG['gaussian_read_noise_sigma'],
+            clip_negative=False  # Don't clip yet, bad pixels might make it negative
+        )
+        metadata['I_sc'] = I_sc
+        metadata['readout_noise_sigma'] = EXP_CONFIG['gaussian_read_noise_sigma']
+
+        # Step 2: Add bad pixels
+        I_noisy, bad_pixel_mask = self._add_bad_pixels(I_noisy)
+        metadata['n_bad_pixels'] = np.sum(bad_pixel_mask)
+
+        # Step 3: Add bad lines
+        I_noisy, bad_line_mask = self._add_bad_lines(I_noisy)
+        metadata['n_bad_line_pixels'] = np.sum(bad_line_mask)
+
+        # Step 4: Clip negative values
+        I_noisy = np.maximum(I_noisy, 0).astype(np.float32)
+
+        # Combine defect mask (bad pixels + bad lines)
+        defect_mask = bad_pixel_mask | bad_line_mask
+
+        return I_noisy, I_sc, metadata, defect_mask
+
+    def apply_beamstop_only(
+        self,
+        I_noisy: np.ndarray
+    ) -> Tuple[np.ndarray, np.ndarray, Dict[str, Any]]:
+        """
+        Apply beam stop mask only, without adding noise.
+
+        This method is used when you want to apply the beam stop mask
+        after noise and random detector masks have been added, following
+        the correct physical pipeline: Normalize -> Noise -> Defects -> Beamstop.
+
+        Args:
+            I_noisy: Noisy intensity pattern.
+
+        Returns:
+            Tuple of:
+                - I_masked: Intensity with beam stop applied
+                - beamstop_mask: Boolean mask where True = blocked
+                - metadata: Dictionary with beamstop information
+        """
+        I_masked, beamstop_mask = self._apply_beamstop(I_noisy)
+        metadata = {
+            'beamstop_masked_pixels': int(np.sum(beamstop_mask))
+        }
+        return I_masked, beamstop_mask, metadata
 
     def _add_bad_pixels(
         self,
@@ -213,7 +302,12 @@ class NoiseAndBeamstopApplier:
         Returns:
             Gradient mask (0 = fully blocked, 1 = fully clear).
         """
+        # Decide whether to apply gradient or use hard edge
         if gradient_width is None:
+            if self.rng.random() < EXP_CONFIG.get('beamstop_no_gradient_prob', 0.0):
+                # No gradient — hard edge (binary mask)
+                gradient_mask = (1 - base_mask).astype(np.float32)
+                return gradient_mask
             gradient_width = self.rng.integers(*EXP_CONFIG['beamstop_gradient_width_range'])
 
         # Distance from blocked region
@@ -267,11 +361,11 @@ def apply_noise_and_beamstop(
         seed: Random seed.
 
     Returns:
-        Tuple of (noisy_intensity, beamstop_mask, I_sc).
+        Tuple of (noisy_intensity, combined_mask, I_sc).
     """
     applier = NoiseAndBeamstopApplier(seed=seed)
-    I_noisy, beamstop_mask, I_sc, _ = applier.apply(I_normalized)
-    return I_noisy, beamstop_mask, I_sc
+    I_noisy, combined_mask, I_sc, _ = applier.apply(I_normalized)
+    return I_noisy, combined_mask, I_sc
 
 
 if __name__ == "__main__":

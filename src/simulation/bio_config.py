@@ -33,13 +33,14 @@ EXP_CONFIG: Dict[str, Any] = {
 
     # ===== Beam Stop =====
     'beamstop_mask_file': BASE_DIR / 'beamstop_mask-585x585.mat',
-    'beamstop_gradient_width_range': [3, 10],   # gradient transition width range (pixels)
+    'beamstop_no_gradient_prob': 0.2,          # probability of NO gradient (hard edge)
+    'beamstop_gradient_width_range': [3, 10],  # gradient transition width range (pixels), used when gradient is applied
 
     # ===== Noise Model Parameters (calibrated from experimental data) =====
-    'poisson_I_sc_range': [1e7, 1e9],           # total photon count range (1e9 matches experiment, 1e7 is extreme noise)
-    'gaussian_read_noise_sigma': 5.0,           # Gaussian readout noise std (ADU)
+    'poisson_I_sc_range': [1e7, 1e9],           # total photon count range (log-uniform sampling)
+    'gaussian_read_noise_sigma': 0.25,           # Gaussian readout noise std (ADU)
     'bad_pixel_prob': 0.001,                    # probability of single bad pixel
-    'bad_line_prob': 0.005,                     # probability of bad line
+    'bad_line_prob': 0.02,                     # probability of bad line
 
     # ===== Data Generation Control =====
     'train_size': 585,                          # training data size (585x585)
@@ -55,7 +56,7 @@ EXP_CONFIG: Dict[str, Any] = {
 # The actual physical scale is handled during diffraction simulation.
 
 BACTERIA_CONFIG: Dict[str, Any] = {
-    'sample_size_px': 70,                       # Fixed sample size (pixels) for consistent pipeline output
+    'sample_size_px': range(50,70),                       # Fixed sample size (pixels) for consistent pipeline output
     'length_range_px': (80, 200),               # pixels, bacteria length range
     'diameter_range_px': (30, 60),              # pixels, bacteria diameter range
     'cell_states': ['normal', 'dividing', 'curved'],  # cell state types
@@ -72,7 +73,7 @@ BACTERIA_CONFIG: Dict[str, Any] = {
 AUGMENT_CONFIG: Dict[str, Any] = {
     'rotation_range': (0, 360),                 # rotation angle range (degrees)
     'translation_range': (-0.1, 0.1),           # translation range (fraction of size)
-    'scale_range': (0.9, 1.1),                  # scale range
+    'scale_range': (0.95, 1.05),                  # scale range
     'rotation_order': 1,                        # interpolation order for rotation (bilinear)
 }
 
@@ -81,7 +82,7 @@ AUGMENT_CONFIG: Dict[str, Any] = {
 # =============================================================================
 
 RANDOM_MASK_CONFIG: Dict[str, Any] = {
-    'apply_probability': 0.5,                   # probability to apply random mask
+    'apply_probability': 0.001,                   # probability to apply random mask
     'n_shapes_range': (1, 3),                   # number of shapes to combine
     'shape_types': ['circle', 'rectangle', 'irregular'],
     'circle_radius_range': (5, 30),             # circle radius range (pixels)

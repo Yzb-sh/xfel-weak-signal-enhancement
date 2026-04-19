@@ -48,7 +48,7 @@ python scripts/main_pipeline.py train --data data/simulated/bio_diffraction_v1.h
 from src.simulation import (
     BioSampleGenerator, BioDiffractionSimulator,
     IntensityNormalizer, NoiseAndBeamstopApplier,
-    preprocess_for_training
+    RandomMaskApplier, preprocess_for_training
 )
 import numpy as np
 
@@ -58,17 +58,27 @@ obj = bio_gen.generate(seed=42)  # (585, 585) float32, values in [0, 1]
 
 # 2. FFT衍射模拟
 sim = BioDiffractionSimulator()
-I_clean = sim.simulate(obj)  # (585, 585) 衍射强度
+I_clean = sim.simulate(obj)  # (585, 585) 衍射强度 |F(u)|²
 
-# 3. 强度归一化（泊松噪声前必须执行）
+# 3. 强度归一化（泊松噪声前必须执行，使 sum=1）
 norm = IntensityNormalizer()
-I_norm = norm.normalize(I_clean)  # sum = 1.0
+I_norm = norm.normalize(I_clean)
 
-# 4. 噪声 + Beamstop
+# 4. 泊松 + 高斯噪声（I_sc 按对数均匀分布采样）
 noise_bs = NoiseAndBeamstopApplier(seed=42)
-I_noisy, mask, I_sc, metadata = noise_bs.apply(I_norm)
+I_noisy, I_sc, noise_meta, defect_mask = noise_bs.apply_noise_only(I_norm, seed=42)
 
-# 5. 训练预处理
+# 5. 随机探测器缺陷掩模
+mask_applier = RandomMaskApplier(seed=42)
+I_noisy, random_mask = mask_applier.apply(I_noisy, prob=0.5, seed=42)
+
+# 6. Beamstop掩码
+I_noisy, beamstop_mask, bs_meta = noise_bs.apply_beamstop_only(I_noisy)
+
+# 7. 合并所有掩模（beamstop | 随机缺陷 | 坏像素/坏线）
+final_mask = beamstop_mask | random_mask | defect_mask
+
+# 8. 训练预处理
 clean_norm, noisy_norm, mean, std = preprocess_for_training(I_clean, I_noisy)
 ```
 
@@ -144,11 +154,13 @@ DeepPhase-X/
 
 1. **BioSampleGenerator** → E. coli 2D密度图 [0,1]（正常/分裂/弯曲三种形态）
 2. **DataAugmentor** → 随机旋转(0-360°)、平移(±10%)、缩放(0.9-1.1x)
-3. **BioDiffractionSimulator** → FFT衍射强度图
-4. **IntensityNormalizer** → 归一化 sum=1（泊松噪声前必须执行）
-5. **RandomMaskApplier** → 50%概率添加随机探测器缺陷
-6. **NoiseAndBeamstopApplier** → 泊松噪声 + 高斯噪声 + Beamstop掩码
-7. **Preprocessing** → log10(1+x) + 标准化 → HDF5
+3. **BioDiffractionSimulator** → FFT衍射强度图 |F(u)|²
+4. **IntensityNormalizer** → 归一化 sum=1，使强度代表光子概率分布
+5. **NoiseApplication** → 泊松噪声（光子计数统计）+ 高斯噪声（读出噪声），I_sc 按**对数均匀分布** 采样
+6. **BadPixels/BadLines** → 随机坏像素（0.1%）和坏线（2%概率）
+7. **RandomMaskApplier** → 0.1%概率添加随机几何形状探测器缺陷掩模
+8. **BeamstopApplication** → Beamstop掩码（从实验 .mat 文件加载，含梯度过渡）
+9. **Preprocessing** → log10(1+x) + 标准化 → HDF5
 
 ## 测试
 

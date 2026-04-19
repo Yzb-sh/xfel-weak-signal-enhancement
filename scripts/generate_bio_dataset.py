@@ -90,39 +90,46 @@ class DatasetGenerator:
 
         # Determine sample_size_px for this sample
         size_cfg = self.sample_size_px_config
-        if isinstance(size_cfg, (list, tuple)) and len(size_cfg) == 2:
+        if isinstance(size_cfg, range):
+            sample_size_px = int(self.rng.integers(size_cfg.start, size_cfg.stop + 1))
+        elif isinstance(size_cfg, (list, tuple)) and len(size_cfg) == 2:
             sample_size_px = int(self.rng.integers(size_cfg[0], size_cfg[1] + 1))
         elif isinstance(size_cfg, int):
             sample_size_px = size_cfg
         else:
             sample_size_px = None
 
-        # Step 1: Generate bio sample with appropriate size
-        bio_generator = BioSampleGenerator(seed=sample_seed, sample_size_px=sample_size_px)
-        obj = bio_generator.generate(seed=sample_seed)
-
-        # Step 2: Data augmentation
-        obj_aug = self.augmentor.augment(obj, seed=sample_seed + 1000)
-
-        # Step 3: Diffraction simulation
-        I_clean = self.diffraction_sim.simulate(obj_aug)
+        # Step 1-3: Generate, augment, and simulate with retry
+        # (augmentation may move small bacteria out of frame)
+        for attempt in range(10):
+            bio_generator = BioSampleGenerator(seed=sample_seed, sample_size_px=sample_size_px)
+            obj = bio_generator.generate(seed=sample_seed)
+            obj_aug = self.augmentor.augment(obj, seed=sample_seed + 1000 + attempt)
+            I_clean = self.diffraction_sim.simulate(obj_aug)
+            if np.sum(I_clean) > 1e-10:
+                break
 
         # Step 4: Intensity normalization (CRITICAL: before noise)
         I_norm = self.intensity_norm.normalize(I_clean)
 
-        # Step 5: Random mask (detector defects) - optional
+        # Step 5: Apply Poisson + Gaussian noise only (before random mask)
+        I_noisy, I_sc, noise_metadata, defect_mask = self.noise_beamstop.apply_noise_only(
+            I_norm, seed=sample_seed + 2000
+        )
+
+        # Step 6: Random mask (detector defects) - applied to noisy signal
         if apply_random_mask:
-            I_masked, random_mask_record = self.random_mask.apply(
-                I_norm, prob=0.5, seed=sample_seed + 2000
+            I_noisy, random_mask_record = self.random_mask.apply(
+                I_noisy, prob=0.5, seed=sample_seed + 3000
             )
         else:
-            I_masked = I_norm.copy()
-            random_mask_record = np.zeros_like(I_norm, dtype=bool)
+            random_mask_record = np.zeros_like(I_noisy, dtype=bool)
 
-        # Step 6: Noise and beamstop
-        I_noisy, beamstop_mask, I_sc, noise_metadata = self.noise_beamstop.apply(
-            I_masked, seed=sample_seed + 3000
-        )
+        # Step 7: Apply beam stop mask (final step)
+        I_noisy, beamstop_mask, beamstop_metadata = self.noise_beamstop.apply_beamstop_only(I_noisy)
+
+        # Combine all masks into one: beamstop | random defects | bad pixels/lines
+        final_mask = beamstop_mask | random_mask_record | defect_mask
 
         # Combine metadata
         metadata = {
@@ -131,10 +138,12 @@ class DatasetGenerator:
             'I_sc': float(I_sc),
             'random_mask_applied': bool(random_mask_record.any()),
             'random_mask_pixels': int(np.sum(random_mask_record)),
-            **noise_metadata
+            'total_mask_pixels': int(np.sum(final_mask)),
+            **noise_metadata,
+            **beamstop_metadata
         }
 
-        return I_clean, I_noisy, beamstop_mask, metadata
+        return I_clean, I_noisy, final_mask, metadata
 
     def generate_split(
         self,
